@@ -74,11 +74,11 @@ def reindex_standalone_files(app):
             # Important for embedding dimension migration:
             # delete old collection before recreating it.
             try:
-                if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection):
-                    VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
-                    log_info(f"  Deleted old collection: {file_collection}")
+                VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
+                log_info(f"  Deleted old collection: {file_collection}")
             except Exception as e:
-                log_info(f"  Could not delete old collection {file_collection}: {e}")
+                log_info(f"  No old collection to delete for {file_collection}: {e}")
+
 
             db = next(get_session())
             try:
