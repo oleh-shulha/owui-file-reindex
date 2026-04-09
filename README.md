@@ -1,18 +1,17 @@
 # Open WebUI File Reindex Script
 
-A Python script for reindexing files in Open WebUI after a vector database migration. This script processes standalone files and restores their vector database collections without deleting any existing data.
+A Python script for force reindexing files and knowledge collections in Open WebUI after a vector database or embedding-dimension migration.
 
-Tested on OWUI v0.6.41.
+The current version is adapted for newer Open WebUI releases and Chroma-backed migrations where old collections must be rebuilt, not just topped up.
 
 ## What It Does
 
-This script reindexes all standalone files in Open WebUI by:
+This script reindexes Open WebUI content by:
 - Scanning all files in the database
-- Identifying files that need reindexing (missing or empty vector collections)
-- Processing each file through Open WebUI's indexing pipeline
-- Creating or updating `file-{id}` collections in the vector database
-
-**Note:** Files stored in folders are also reindexed by this script. If you previously attempted to restore folder files separately and they were already restored, the script will detect this and skip them automatically.
+- Rebuilding standalone `file-{id}` collections from scratch
+- Detecting knowledge bases that reference those files
+- Rebuilding affected knowledge collections from scratch as well
+- Reprocessing files through Open WebUI's own indexing pipeline
 
 ## How It Works
 
@@ -20,11 +19,9 @@ The script:
 1. Initializes the Open WebUI application context with all necessary dependencies
 2. Connects to the existing database and vector store
 3. Retrieves all files from the database
-4. For each file:
-   - Checks if it has content to process
-   - Verifies if a vector collection already exists with documents
-   - Skips files that are already indexed
-   - Reindexes files that are missing or have empty collections
+4. Rebuilds standalone file collections from scratch
+5. Finds affected knowledge bases
+6. Rebuilds those knowledge collections from scratch
 
 ### Data Access
 
@@ -37,7 +34,9 @@ The script accesses data by:
 ## Important Notes
 
 ### ⚠️ Backup Your Data
-**Always backup your database before running this script**, even though it does not delete anything. This is a safety precaution for any data migration process.
+**Always backup your database before running this script.**
+
+This version intentionally deletes old vector collections before rebuilding them. That is exactly what you want for embedding dimension migrations, but it also means this is no longer a harmless "fill in missing vectors" helper.
 
 ### Container Scaling Required
 When running this script in an Azure container (or similar environment):
@@ -48,12 +47,11 @@ When running this script in an Azure container (or similar environment):
 ### Resumable Process
 If the process fails or is interrupted:
 - **You can safely run it again**
-- The script will automatically skip already indexed files
-- Progress is logged so you can track where it continues from
+- Existing collections will be rebuilt again as needed
+- Progress is logged so you can track what was already processed
 
-### Knowledge Bases
-- Knowledge bases can be restored using the Open WebUI UI
-- Reindexing standalone files **might** restore associated knowledge bases (behavior uncertain - not tested with knowledge bases)
+### Open WebUI auth/env note
+Some Open WebUI container setups expose empty auth-related env vars. In that case the script may fail during app initialization unless you provide temporary values just for the script process.
 
 ## Usage
 
@@ -68,11 +66,16 @@ cd /app/backend
 
 3. **Download the script:**
 ```bash
-curl -o reindex_all.py https://raw.githubusercontent.com/tomasloksa/owui-file-reindex/refs/heads/main/reindex_all.py
+curl -o reindex_all.py https://raw.githubusercontent.com/oleh-shulha/owui-file-reindex/refs/heads/main/reindex_all.py
 ```
 
 4. **Run the script:**
 ```bash
+WEBUI_AUTH=False \
+WEBUI_SECRET_KEY='temp-reindex-key' \
+WEBUI_JWT_SECRET_KEY='temp-reindex-key' \
+OAUTH_SESSION_TOKEN_ENCRYPTION_KEY='temp-reindex-key' \
+OAUTH_CLIENT_INFO_ENCRYPTION_KEY='temp-reindex-key' \
 python3 reindex_all.py
 ```
 
@@ -81,12 +84,14 @@ python3 reindex_all.py
 ## Output
 
 The script provides detailed logging including:
+- Detected embedding dimension
 - Progress percentage and file counts
-- Files being processed with their IDs and filenames
+- Standalone files being rebuilt
+- Knowledge collections being rebuilt
 - Memory cleanup notifications
-- Summary of successful, skipped, and failed files
+- Summary of successful and failed items
 - Total execution time
-- List of any failed files with error messages
+- List of any failed files or knowledge collections with error messages
 
 Example output:
 ```
