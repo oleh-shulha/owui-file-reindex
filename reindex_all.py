@@ -139,25 +139,30 @@ def main():
     start_time = time.time()
 
     try:
-        # Import and initialize the app
         log_info("Initializing Open WebUI app...")
         from open_webui.main import app
+        from fastapi.testclient import TestClient
 
-        # Verify we have the necessary components
-        if not hasattr(app.state, 'EMBEDDING_FUNCTION'):
-            log_error("App state doesn't have EMBEDDING_FUNCTION. App may not be properly initialized.")
-            sys.exit(1)
+        with TestClient(app) as client:
+            app = client.app
 
-        log_info(f"App initialized. Embedding function: {type(app.state.EMBEDDING_FUNCTION)}")
+            if not hasattr(app.state, 'EMBEDDING_FUNCTION'):
+                log_error("App state doesn't have EMBEDDING_FUNCTION. App may not be properly initialized.")
+                sys.exit(1)
 
-        log_info("\n" + "=" * 80)
-        log_info("Reindexing Standalone Files")
-        log_info("=" * 80)
-        file_success, file_failed = reindex_standalone_files(app)
-        log_info(f"✓ Standalone files reindexed: {file_success}, failed: {len(file_failed)}")
+            if not hasattr(app.state, 'main_loop'):
+                log_error("App state doesn't have main_loop. Lifespan may not be properly initialized.")
+                sys.exit(1)
+
+            log_info(f"App initialized. Embedding function: {type(app.state.EMBEDDING_FUNCTION)}")
+
+            log_info("\n" + "=" * 80)
+            log_info("Reindexing Standalone Files")
+            log_info("=" * 80)
+            file_success, file_failed = reindex_standalone_files(app)
+            log_info(f"✓ Standalone files reindexed: {file_success}, failed: {len(file_failed)}")
 
         elapsed = time.time() - start_time
-
         log_info("\n" + "=" * 80)
         log_info("REINDEXING COMPLETE!")
         log_info("=" * 80)
@@ -179,6 +184,7 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
 
 
 if __name__ == "__main__":
