@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Force reindex all Open WebUI files for vector dimension migration.
+Force reindex Open WebUI file and knowledge collections for embedding dimension migration.
 
 Use this when your embedding model dimension changed
-(for example 2048 -> 3072) and old Chroma collections must be rebuilt.
+(for example 2048 -> 3072) and old vector collections must be rebuilt.
 
 Run inside the Open WebUI container from /app/backend.
 """
@@ -31,11 +31,46 @@ def log_error(msg):
     print(f"[REINDEX ERROR] {msg}", flush=True)
 
 
+def refresh_vector_clients():
+    """Recreate vector DB client and patch loaded modules to avoid stale singleton state."""
+    from open_webui.config import VECTOR_DB
+    from open_webui.retrieval.vector.factory import Vector
+    import open_webui.retrieval.vector.factory as vector_factory
+    import open_webui.routers.retrieval as retrieval_router
+
+    fresh_client = Vector.get_vector(VECTOR_DB)
+    vector_factory.VECTOR_DB_CLIENT = fresh_client
+    retrieval_router.VECTOR_DB_CLIENT = fresh_client
+    return fresh_client
+
+
+def delete_collection_force(collection_name: str):
+    client = refresh_vector_clients()
+    try:
+        client.delete_collection(collection_name=collection_name)
+        log_info(f"  Deleted collection: {collection_name}")
+        return True
+    except Exception as e:
+        log_info(f"  No collection deleted for {collection_name}: {e}")
+        return False
+
+
+def delete_file_from_collection_force(collection_name: str, file_id: str):
+    client = refresh_vector_clients()
+    try:
+        client.delete(collection_name=collection_name, filter={"file_id": file_id})
+        log_info(f"  Deleted file_id={file_id} from collection: {collection_name}")
+        return True
+    except Exception as e:
+        log_info(f"  No file rows deleted from {collection_name}: {e}")
+        return False
+
+
 def reindex_standalone_files(app):
     from open_webui.models.files import Files
     from open_webui.models.users import Users
+    from open_webui.models.knowledge import Knowledges
     from open_webui.routers.retrieval import ProcessFileForm, process_file
-    from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
     from open_webui.internal.db import get_session
 
     class Request:
@@ -71,14 +106,9 @@ def reindex_standalone_files(app):
                 f"Reindexing file: {file.filename} (ID: {file.id})"
             )
 
-            # Important for embedding dimension migration:
-            # delete old collection before recreating it.
-            try:
-                VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
-                log_info(f"  Deleted old collection: {file_collection}")
-            except Exception as e:
-                log_info(f"  No old collection to delete for {file_collection}: {e}")
-
+            # 1. Rebuild standalone file collection from scratch.
+            delete_collection_force(file_collection)
+            refresh_vector_clients()
 
             db = next(get_session())
             try:
@@ -90,6 +120,35 @@ def reindex_standalone_files(app):
                 )
             finally:
                 db.close()
+
+            # 2. Rebuild knowledge collections that reference this file.
+            db = next(get_session())
+            try:
+                knowledges = Knowledges.get_knowledges_by_file_id(file.id, db=db) or []
+            finally:
+                db.close()
+
+            if knowledges:
+                log_info(f"  Found {len(knowledges)} knowledge collection(s) for file {file.id}")
+
+            for knowledge in knowledges:
+                knowledge_collection = knowledge.id
+                log_info(f"  Reindexing knowledge collection: {knowledge_collection}")
+
+                # Remove only this file's chunks from the knowledge collection.
+                delete_file_from_collection_force(knowledge_collection, file.id)
+                refresh_vector_clients()
+
+                db = next(get_session())
+                try:
+                    process_file(
+                        request,
+                        ProcessFileForm(file_id=file.id, collection_name=knowledge_collection),
+                        user=admin_user,
+                        db=db,
+                    )
+                finally:
+                    db.close()
 
             success_count += 1
 
@@ -139,6 +198,7 @@ def main():
                 log_error("App state doesn't have main_loop.")
                 sys.exit(1)
 
+            refresh_vector_clients()
             log_info(f"App initialized. Embedding function: {type(app.state.EMBEDDING_FUNCTION)}")
 
             log_info("\n" + "=" * 80)
