@@ -9,9 +9,14 @@ Run inside the Open WebUI container from /app/backend.
 """
 
 import sys
+import os
+import asyncio
+import inspect
 import logging
 import time
 import gc
+from collections import deque
+from threading import Lock
 
 print("Script started!", flush=True)
 
@@ -29,6 +34,79 @@ def log_info(msg):
 def log_error(msg):
     log.error(msg)
     print(f"[REINDEX ERROR] {msg}", flush=True)
+
+
+class TokenRateLimiter:
+    def __init__(self, tokens_per_minute: int, chars_per_token: int = 4):
+        self.tokens_per_minute = max(int(tokens_per_minute), 1)
+        self.chars_per_token = max(int(chars_per_token), 1)
+        self.events = deque()
+        self.lock = Lock()
+
+    def estimate_tokens(self, value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            return max(1, (len(value) + self.chars_per_token - 1) // self.chars_per_token)
+        if isinstance(value, (list, tuple)):
+            return sum(self.estimate_tokens(v) for v in value)
+        return self.estimate_tokens(str(value))
+
+    def reserve_delay(self, tokens: int) -> float:
+        now = time.monotonic()
+        with self.lock:
+            while self.events and now - self.events[0][0] >= 60:
+                self.events.popleft()
+
+            used = sum(t for _, t in self.events)
+            if used + tokens <= self.tokens_per_minute:
+                self.events.append((now, tokens))
+                return 0.0
+
+            delay = 60 - (now - self.events[0][0])
+            return max(delay, 0.5)
+
+
+def install_embedding_tpm_throttle(app):
+    tpm_limit = os.getenv("OWUI_REINDEX_TPM_LIMIT", "").strip()
+    if not tpm_limit:
+        return False
+
+    chars_per_token = os.getenv("OWUI_REINDEX_CHARS_PER_TOKEN", "4").strip() or "4"
+    limiter = TokenRateLimiter(int(tpm_limit), int(chars_per_token))
+    original = app.state.EMBEDDING_FUNCTION
+
+    if inspect.iscoroutinefunction(original):
+        async def throttled_embedding_function(*args, **kwargs):
+            text_input = args[0] if args else kwargs.get("texts") or kwargs.get("text") or kwargs.get("input")
+            estimated_tokens = limiter.estimate_tokens(text_input)
+            delay = limiter.reserve_delay(estimated_tokens)
+            if delay > 0:
+                log_info(
+                    f"TPM throttle: sleeping {delay:.1f}s before embedding batch "
+                    f"(~{estimated_tokens} tokens, limit {limiter.tokens_per_minute}/min)"
+                )
+                await asyncio.sleep(delay)
+            return await original(*args, **kwargs)
+    else:
+        def throttled_embedding_function(*args, **kwargs):
+            text_input = args[0] if args else kwargs.get("texts") or kwargs.get("text") or kwargs.get("input")
+            estimated_tokens = limiter.estimate_tokens(text_input)
+            delay = limiter.reserve_delay(estimated_tokens)
+            if delay > 0:
+                log_info(
+                    f"TPM throttle: sleeping {delay:.1f}s before embedding batch "
+                    f"(~{estimated_tokens} tokens, limit {limiter.tokens_per_minute}/min)"
+                )
+                time.sleep(delay)
+            return original(*args, **kwargs)
+
+    app.state.EMBEDDING_FUNCTION = throttled_embedding_function
+    log_info(
+        f"Installed embedding TPM throttle: OWUI_REINDEX_TPM_LIMIT={limiter.tokens_per_minute}, "
+        f"OWUI_REINDEX_CHARS_PER_TOKEN={limiter.chars_per_token}"
+    )
+    return True
 
 
 def refresh_vector_clients():
@@ -268,6 +346,7 @@ def main():
             dim = get_embedding_dimension(app)
             if dim:
                 log_info(f"Detected current embedding dimension: {dim}")
+            install_embedding_tpm_throttle(app)
             log_info(f"App initialized. Embedding function: {type(app.state.EMBEDDING_FUNCTION)}")
 
             log_info("\n" + "=" * 80)
