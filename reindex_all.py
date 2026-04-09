@@ -116,3 +116,70 @@ def reindex_standalone_files(app):
 
         except Exception as e:
             log_error(f"Failed to reindex file {file.filename} (ID: {file.id}): {e}")
+            failed_files.append({
+                "file_id": file.id,
+                "filename": file.filename,
+                "error": str(e)
+            })
+            continue
+
+    log_info(
+        f"File reindexing complete. Total files checked: {total_files}, "
+        f"Skipped: {skipped_count}, Successfully reindexed: {success_count}, "
+        f"Failed: {len(failed_files)}"
+    )
+    return success_count, failed_files
+
+
+def main():
+    log_info("=" * 80)
+    log_info("Starting complete reindexing process")
+    log_info("=" * 80)
+
+    start_time = time.time()
+
+    try:
+        # Import and initialize the app
+        log_info("Initializing Open WebUI app...")
+        from open_webui.main import app
+
+        # Verify we have the necessary components
+        if not hasattr(app.state, 'EMBEDDING_FUNCTION'):
+            log_error("App state doesn't have EMBEDDING_FUNCTION. App may not be properly initialized.")
+            sys.exit(1)
+
+        log_info(f"App initialized. Embedding function: {type(app.state.EMBEDDING_FUNCTION)}")
+
+        log_info("\n" + "=" * 80)
+        log_info("Reindexing Standalone Files")
+        log_info("=" * 80)
+        file_success, file_failed = reindex_standalone_files(app)
+        log_info(f"✓ Standalone files reindexed: {file_success}, failed: {len(file_failed)}")
+
+        elapsed = time.time() - start_time
+
+        log_info("\n" + "=" * 80)
+        log_info("REINDEXING COMPLETE!")
+        log_info("=" * 80)
+        log_info(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.1f} minutes)")
+        log_info(f"Files reindexed: {file_success}")
+
+        all_failed = file_failed
+        if all_failed:
+            log_info("\nFailed files:")
+            for failed in all_failed[:10]:
+                log_info(f"  - {failed.get('filename', 'Unknown')} ({failed['file_id']}): {failed['error']}")
+            if len(all_failed) > 10:
+                log_info(f"  ... and {len(all_failed) - 10} more")
+
+        sys.exit(0)
+
+    except Exception as e:
+        log_error(f"Fatal error during reindexing: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
