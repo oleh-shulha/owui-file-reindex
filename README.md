@@ -79,7 +79,7 @@ OAUTH_CLIENT_INFO_ENCRYPTION_KEY='temp-reindex-key' \
 python3 reindex_all.py
 ```
 
-If your embedding provider has a strict tokens-per-minute limit, you can enable a simple built-in throttle:
+If your embedding provider has strict minute-based limits, you can enable a simple built-in throttle:
 
 ```bash
 WEBUI_AUTH=False \
@@ -88,12 +88,14 @@ WEBUI_JWT_SECRET_KEY='temp-reindex-key' \
 OAUTH_SESSION_TOKEN_ENCRYPTION_KEY='temp-reindex-key' \
 OAUTH_CLIENT_INFO_ENCRYPTION_KEY='temp-reindex-key' \
 OWUI_REINDEX_TPM_LIMIT='30000' \
+OWUI_REINDEX_RPM_LIMIT='100' \
 python3 reindex_all.py
 ```
 
 Optional:
 - `OWUI_REINDEX_TPM_LIMIT` - approximate embedding tokens per minute cap for this script
-- `OWUI_REINDEX_CHARS_PER_TOKEN` - rough estimator used by the throttle, default `4`
+- `OWUI_REINDEX_RPM_LIMIT` - embedding requests per minute cap for this script
+- `OWUI_REINDEX_CHARS_PER_TOKEN` - rough estimator used by the token throttle, default `4`
 
 **Note:** The script must be run from `/app/backend` (or wherever the `open_webui` package is located) to access the necessary Python imports.
 
@@ -101,7 +103,7 @@ Optional:
 
 The script provides detailed logging including:
 - Detected embedding dimension
-- Optional TPM throttle sleeps when enabled
+- Optional TPM/RPM throttle sleeps when enabled
 - Progress percentage and file counts
 - Standalone files being rebuilt
 - Knowledge collections being rebuilt
